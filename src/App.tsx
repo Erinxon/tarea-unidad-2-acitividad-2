@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import "./App.css";
+import { validateCedula } from "./lib/cedula";
 
 type AlertType = "success" | "danger" | "";
 interface AlertState {
@@ -40,27 +41,6 @@ export default function App() {
   const showMessage = (text: string, type: Exclude<AlertType, "">) => {
     setAlert({ text, type, show: true });
   };
-
-  const validateCedula = (c: string): boolean => {
-    return c.length === 11 && /^\d{11}$/.test(c) && getVerifier(c) === getLastDigit(c);
-  };
-
-  const getVerifier = (c: string): number => {
-    const multiplicadores = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2];
-    let concatenated = "";
-
-    for (let i = 0; i < 10; i++) {
-      const prod = Number(c[i]) * multiplicadores[i];
-      concatenated += String(prod);
-    }
-
-    const sum = [...concatenated].reduce((acc, d) => acc + parseInt(d, 10), 0);
-    const nextTen = Math.ceil(sum / 10) * 10;
-    const verifier = (nextTen - sum) % 10; // 0..9
-    return verifier;
-  };
-
-  const getLastDigit = (c: string): number => parseInt(c[10]!, 10);
 
   const formatPretty = (c: string): string => c.replace(/^(\d{3})(\d{7})(\d)$/, "$1-$2-$3");
 
