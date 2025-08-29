@@ -141,15 +141,3 @@ jobs:
               <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Ver ejecución y artefactos</a>
             </p>
           priority: high
-
-  # Ejemplo de job que SOLO corre cuando el evento es un PUSH a master/main (ej. tras hacer merge dev -> master)
-  only_on_master:
-    name: Only on push to master/main
-    runs-on: ubuntu-latest
-    needs: [unit, e2e]
-    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') }}
-    steps:
-      - name: Echo merge to master/main detected
-        run: |
-          echo "Este job corre solo en push directo a master/main (p.ej. después de merge)."
-          echo "Ref: ${{ github.ref }}"
