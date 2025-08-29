@@ -1,11 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { validateCedula, formatPretty } from "./cedula";
 
-// Sustituye por muestras reales válidas si las tienes:
 const validSamples = [
-  "00113918253",
-  "40200700675",
-  "03103749622",
+  "40241394648",
+  "00100000058",
+  "00100000371",
 ].map(s => [s, s.replace(/^(\d{3})(\d{7})(\d)$/, "$1-$2-$3")] as const);
 
 describe("validateCedula", () => {
