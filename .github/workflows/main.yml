@@ -2,8 +2,9 @@ name: CI - React TS + Tests + Email
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master, dev ]   # Se ejecuta en push a estas ramas
   pull_request:
+    branches: [ master ]   # Se ejecuta en PR cuyo destino sea estas ramas
 
 permissions:
   contents: read
@@ -12,7 +13,6 @@ jobs:
   unit:
     name: Unit tests (Vitest)
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,7 +21,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
 
       - name: Install deps
         run: npm ci
@@ -41,7 +41,6 @@ jobs:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     needs: unit
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,7 +49,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
 
       - name: Install deps
         run: npm ci
@@ -68,14 +67,14 @@ jobs:
           sleep 3
 
       - name: Run E2E (Playwright) and produce HTML/JUnit
-        run: npx playwright test --reporter=html,junit
         env:
           BASE_URL: http://localhost:5173
+        run: npx playwright test --reporter=html,junit
 
       - name: Stop preview
         if: always()
         run: |
-          if [ -f preview.pid ]; then kill $(cat preview.pid) || true; fi
+          if [ -f preview.pid ]; then kill "$(cat preview.pid)" || true; fi
 
       - name: Upload E2E HTML report
         uses: actions/upload-artifact@v4
@@ -93,70 +92,13 @@ jobs:
           path: test-results/**/*.xml
           if-no-files-found: ignore
 
+  # Notificación por correo en cualquier resultado (puedes cambiar a "if: failure()" si solo quieres en fallos)
   notify:
     name: Notify (Email)
     runs-on: ubuntu-latest
     needs: [unit, e2e]
-    # Envía siempre; si prefieres solo en fallos, cambia por: if: failure()
     if: always()
-
     steps:
-      - name: Build summary
-        id: buildmsg
-        run: |
-          UNIT="${{ needs.unit.result }}"
-          E2E="${{ needs.e2e.result }}"
-          CONCLUSION="✅ CI OK"
-          if [ "$UNIT" != "success" ] || [ "$E2E" != "success" ]; then
-            CONCLUSION="❌ CI con fallos"
-          fi
-
-          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          BRANCH="${{ github.ref_name }}"
-          COMMIT="${{ github.sha }}"
-          REPO="$GITHUB_REPOSITORY"
-
-          echo "subject=${CONCLUSION} - ${REPO} [${BRANCH}]" >> $GITHUB_OUTPUT
-
-          MSG_TEXT="$(cat <<EOF
-${CONCLUSION}
-
-• Unit: ${UNIT}
-• E2E: ${E2E}
-
-Repositorio: ${REPO}
-Branch: ${BRANCH}
-Commit: ${COMMIT}
-
-Ver ejecución:
-${RUN_URL}
-EOF
-)"
-          echo "text_body<<EOF" >> $GITHUB_OUTPUT
-          echo "$MSG_TEXT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          MSG_HTML="$(cat <<'EOF'
-<p><strong>${CONCLUSION}</strong></p>
-<ul>
-  <li><strong>Unit:</strong> ${UNIT}</li>
-  <li><strong>E2E:</strong> ${E2E}</li>
-</ul>
-<p>
-  <strong>Repositorio:</strong> ${REPO}<br/>
-  <strong>Branch:</strong> ${BRANCH}<br/>
-  <strong>Commit:</strong> ${COMMIT}
-</p>
-<p>
-  <a href="${RUN_URL}">Ver ejecución y artefactos</a>
-</p>
-EOF
-)"
-          MSG_HTML=$(echo "$MSG_HTML" | sed "s|\${CONCLUSION}|$CONCLUSION|g; s|\${UNIT}|$UNIT|g; s|\${E2E}|$E2E|g; s|\${REPO}|$REPO|g; s|\${BRANCH}|$BRANCH|g; s|\${COMMIT}|$COMMIT|g; s|\${RUN_URL}|$RUN_URL|g")
-          echo "html_body<<EOF" >> $GITHUB_OUTPUT
-          echo "$MSG_HTML" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Send email
         uses: dawidd6/action-send-mail@v3
         with:
@@ -165,9 +107,49 @@ EOF
           secure: ${{ secrets.SMTP_PORT == '465' }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: ${{ steps.buildmsg.outputs.subject }}
           from: ${{ secrets.EMAIL_FROM }}
           to: ${{ secrets.EMAIL_TO }}
-          html_body: ${{ steps.buildmsg.outputs.html_body }}
-          body: ${{ steps.buildmsg.outputs.text_body }}
+          subject: >-
+            ${{ (needs.unit.result == 'success' && needs.e2e.result == 'success')
+                && '✅ CI OK' || '❌ CI con fallos' }}
+            - ${{ github.repository }} [${{ github.ref_name }}]
+          body: |
+            Resultado CI
+
+            • Unit: ${{ needs.unit.result }}
+            • E2E:  ${{ needs.e2e.result }}
+
+            Repo:   ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+
+            Ver ejecución:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          html_body: |
+            <p><strong>${{ (needs.unit.result == 'success' && needs.e2e.result == 'success')
+              && '✅ CI OK' || '❌ CI con fallos' }}</strong></p>
+            <ul>
+              <li><strong>Unit:</strong> ${{ needs.unit.result }}</li>
+              <li><strong>E2E:</strong>  ${{ needs.e2e.result }}</li>
+            </ul>
+            <p>
+              <strong>Repo:</strong> ${{ github.repository }}<br/>
+              <strong>Branch:</strong> ${{ github.ref_name }}<br/>
+              <strong>Commit:</strong> ${{ github.sha }}
+            </p>
+            <p>
+              <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Ver ejecución y artefactos</a>
+            </p>
           priority: high
+
+  # Ejemplo de job que SOLO corre cuando el evento es un PUSH a master/main (ej. tras hacer merge dev -> master)
+  only_on_master:
+    name: Only on push to master/main
+    runs-on: ubuntu-latest
+    needs: [unit, e2e]
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') }}
+    steps:
+      - name: Echo merge to master/main detected
+        run: |
+          echo "Este job corre solo en push directo a master/main (p.ej. después de merge)."
+          echo "Ref: ${{ github.ref }}"
