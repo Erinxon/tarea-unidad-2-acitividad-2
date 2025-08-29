@@ -1,0 +1,173 @@
+name: CI - React TS + Tests + Email
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (Vitest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run unit tests (Vitest) with coverage
+        run: npx vitest --run --coverage
+
+      - name: Upload unit coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-unit
+          path: coverage/
+          if-no-files-found: ignore
+
+  e2e:
+    name: E2E tests (Playwright)
+    runs-on: ubuntu-latest
+    needs: unit
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Build app
+        run: npm run build
+
+      - name: Start app (preview) in background
+        run: |
+          npx vite preview --port 5173 --strictPort &
+          echo $! > preview.pid
+          sleep 3
+
+      - name: Run E2E (Playwright) and produce HTML/JUnit
+        run: npx playwright test --reporter=html,junit
+        env:
+          BASE_URL: http://localhost:5173
+
+      - name: Stop preview
+        if: always()
+        run: |
+          if [ -f preview.pid ]; then kill $(cat preview.pid) || true; fi
+
+      - name: Upload E2E HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+
+      - name: Upload E2E JUnit (XML)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-junit
+          path: test-results/**/*.xml
+          if-no-files-found: ignore
+
+  notify:
+    name: Notify (Email)
+    runs-on: ubuntu-latest
+    needs: [unit, e2e]
+    # Envía siempre; si prefieres solo en fallos, cambia por: if: failure()
+    if: always()
+
+    steps:
+      - name: Build summary
+        id: buildmsg
+        run: |
+          UNIT="${{ needs.unit.result }}"
+          E2E="${{ needs.e2e.result }}"
+          CONCLUSION="✅ CI OK"
+          if [ "$UNIT" != "success" ] || [ "$E2E" != "success" ]; then
+            CONCLUSION="❌ CI con fallos"
+          fi
+
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          BRANCH="${{ github.ref_name }}"
+          COMMIT="${{ github.sha }}"
+          REPO="$GITHUB_REPOSITORY"
+
+          echo "subject=${CONCLUSION} - ${REPO} [${BRANCH}]" >> $GITHUB_OUTPUT
+
+          MSG_TEXT="$(cat <<EOF
+${CONCLUSION}
+
+• Unit: ${UNIT}
+• E2E: ${E2E}
+
+Repositorio: ${REPO}
+Branch: ${BRANCH}
+Commit: ${COMMIT}
+
+Ver ejecución:
+${RUN_URL}
+EOF
+)"
+          echo "text_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$MSG_TEXT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          MSG_HTML="$(cat <<'EOF'
+<p><strong>${CONCLUSION}</strong></p>
+<ul>
+  <li><strong>Unit:</strong> ${UNIT}</li>
+  <li><strong>E2E:</strong> ${E2E}</li>
+</ul>
+<p>
+  <strong>Repositorio:</strong> ${REPO}<br/>
+  <strong>Branch:</strong> ${BRANCH}<br/>
+  <strong>Commit:</strong> ${COMMIT}
+</p>
+<p>
+  <a href="${RUN_URL}">Ver ejecución y artefactos</a>
+</p>
+EOF
+)"
+          MSG_HTML=$(echo "$MSG_HTML" | sed "s|\${CONCLUSION}|$CONCLUSION|g; s|\${UNIT}|$UNIT|g; s|\${E2E}|$E2E|g; s|\${REPO}|$REPO|g; s|\${BRANCH}|$BRANCH|g; s|\${COMMIT}|$COMMIT|g; s|\${RUN_URL}|$RUN_URL|g")
+          echo "html_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$MSG_HTML" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Send email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          secure: ${{ secrets.SMTP_PORT == '465' }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: ${{ steps.buildmsg.outputs.subject }}
+          from: ${{ secrets.EMAIL_FROM }}
+          to: ${{ secrets.EMAIL_TO }}
+          html_body: ${{ steps.buildmsg.outputs.html_body }}
+          body: ${{ steps.buildmsg.outputs.text_body }}
+          priority: high
